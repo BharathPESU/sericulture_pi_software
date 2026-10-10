@@ -58,3 +58,8 @@ markers = [
     "fault_injection: fault injection tests",
     "slow: long-running tests",
 ]
+
+[tool.pyright]
+include = ["app", "tests"]
+extraPaths = ["app"]
+

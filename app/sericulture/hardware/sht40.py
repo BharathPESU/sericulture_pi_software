@@ -85,6 +85,11 @@ class SHT40Sensor:
         with self._lock:
             return self._last_reading
 
+    def get_last_reading(self) -> SHT40Reading | None:
+        """Get the most recent SHT40 reading. Thread-safe."""
+        with self._lock:
+            return self._last_reading
+
     def check(self) -> DiagnosticResult:
         """Run diagnostic: probe device and take a test reading."""
         if self._driver is None:
