@@ -229,6 +229,12 @@ for grp in gpio i2c video dialout; do
   fi
 done
 
+# Add invoking sudo user (e.g. pi) to sericulture group for easy inspection
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  usermod -aG "$SERVICE_USER" "$SUDO_USER" 2>/dev/null || true
+  log_info "Added user '$SUDO_USER' to group '$SERVICE_USER'."
+fi
+
 # ------------------------------------------------------------------------------
 # 3. Hardened Directories
 # ------------------------------------------------------------------------------
@@ -238,11 +244,11 @@ mkdir -p "$DATA_DIR"
 mkdir -p "$CONFIG_DIR/certs"
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
-chmod 750 "$INSTALL_DIR"
+chmod 755 "$INSTALL_DIR"
 chmod 750 "$DATA_DIR"
 chmod 700 "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR/certs"
-log_success "Directories configured: $INSTALL_DIR, $DATA_DIR, $CONFIG_DIR."
+log_success "Directories configured: $INSTALL_DIR (755), $DATA_DIR (750), $CONFIG_DIR (700)."
 
 # ------------------------------------------------------------------------------
 # 4. Python Virtual Environment & Dependencies
