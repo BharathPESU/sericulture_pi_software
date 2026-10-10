@@ -1,0 +1,141 @@
+# Sericulture Edge-AI Pi 5 Controller — Example Device Configuration
+# Copy this file to /etc/sericulture/device.yaml or config/device.yaml
+# Ensure permissions: chmod 600 device.yaml; chown sericulture:sericulture device.yaml
+
+device:
+  device_id: "SERI-PI5-001"           # REQUIRED: Set to unique physical device serial/ID
+  farm_id: "FARM-KAR-042"             # REQUIRED: Tenant / Farm identifier
+  site_name: "Rearing-Shed-A"
+
+relay:
+  board_model: "waveshare-6ch-industrial-v1"
+  board_revision: "REV1.2"
+  separate_supply_confirmed: true     # Must be verified: coil supply powered from external 5V/12V, NOT Pi 5V
+  channels:
+    ch1_fan:
+      polarity: "active_low"          # Verified relay trigger polarity (active_low or active_high)
+      load_name: "ventilation_fan"
+    ch2_mist:
+      polarity: "active_low"
+      load_name: "mist_sprayer_pump"
+    ch3_light:
+      polarity: "active_low"
+      load_name: "night_inspection_light"
+    ch4_spare:
+      polarity: "active_low"
+      load_name: "spare_ch4"
+    ch5_spare:
+      polarity: "active_low"
+      load_name: "spare_ch5"
+    ch6_spare:
+      polarity: "active_low"
+      load_name: "spare_ch6"
+
+float_switch:
+  contact_type: "NO"                  # NO = Normally Open, NC = Normally Closed
+  pull_up: true                       # Internal pull-up to 3.3V
+  debounce_ms: 200
+  water_ok_when_closed: true          # When float is up, contacts close -> WATER_OK
+
+mains_detector:
+  active_high: true                   # HIGH = 220V mains present on isolated detector output
+  debounce_ms: 500
+  loss_confirm_ms: 2000
+  restore_stabilize_ms: 5000          # Require 5 seconds of continuous stable power before recovery
+
+buzzer:
+  enabled: true
+  max_repeat_interval_s: 60.0
+
+sht40:
+  read_interval_s: 5.0
+  stale_timeout_s: 30.0
+  temp_min_c: 10.0
+  temp_max_c: 45.0
+  humidity_min_pct: 20.0
+  humidity_max_pct: 100.0
+  max_consecutive_errors: 5
+
+camera:
+  device_path: ""                     # Auto-discover via udev (/dev/v4l/by-id/ or /dev/video*) if empty
+  serial_number: ""
+  width: 1920
+  height: 1080
+  fps: 15
+  frame_freshness_timeout_s: 5.0
+  reconnect_backoff_base_s: 2.0
+  max_reconnect_attempts: 10
+
+hailo:
+  model_path: "mock_model.hef"        # Path to compiled .hef model on Raspberry Pi AI HAT+
+  model_version: "yolov8m_sericulture_v1"
+  model_class_names: ["silkworm", "leaf", "cocoon"]
+  input_width: 640
+  input_height: 640
+  confidence_threshold: 0.5
+  nms_iou_threshold: 0.45
+  inference_timeout_s: 5.0
+  max_consecutive_errors: 3
+
+tracking:
+  tracker_type: "bytetrack"
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+
+movement:
+  inactivity_duration_s: 300.0        # 5 minutes without significant motion -> inactivity warning
+  min_observations_for_inactivity: 10
+  movement_score_threshold: 0.05
+  provisional: true                   # PROVISIONAL: Requires domain expert signoff before field use
+
+control:
+  fan_on_temp_c: 28.5                 # PROVISIONAL
+  fan_off_temp_c: 26.0                # Hysteresis off threshold
+  mist_on_humidity_pct: 70.0          # PROVISIONAL
+  mist_off_humidity_pct: 85.0         # Hysteresis off threshold
+  light_on_hour: 18                   # 18:00 UTC
+  light_off_hour: 6                   # 06:00 UTC
+  min_on_time_s: 60.0                 # Anti-chatter: minimum 60s runtime once turned on
+  min_off_time_s: 60.0                # Anti-chatter: minimum 60s cooldown once turned off
+  max_continuous_run_s: 1800.0        # Safety limit: 30 minutes continuous max runtime
+  cooldown_after_max_run_s: 300.0     # 5 minutes cooldown after max runtime
+  persistence_window_s: 15.0          # Condition must persist for 15s before actuation
+  provisional: true
+
+storage:
+  db_path: "/var/lib/sericulture/sericulture.db"
+  wal_mode: true
+  busy_timeout_ms: 5000
+  min_free_disk_mb: 200
+  max_db_size_mb: 1000
+  retention_days: 30
+
+cloud:
+  enabled: true
+  endpoint: "a3xxxxxxxxxxxx-ats.iot.ap-south-1.amazonaws.com"
+  region: "ap-south-1"
+  cert_path: "/etc/sericulture/certs/device.cert.pem"
+  key_path: "/etc/sericulture/certs/device.private.key"
+  root_ca_path: "/etc/sericulture/certs/AmazonRootCA1.pem"
+  client_id: "SERI-PI5-001"
+  topic_root: "novabion/sericulture/v1"
+  qos: 1
+  ack_timeout_s: 30.0
+  batch_size: 20
+  batch_interval_s: 15.0
+  max_retry_count: 50
+
+watchdog:
+  health_interval_s: 60.0
+  sensor_timeout_s: 20.0
+  camera_timeout_s: 10.0
+  inference_timeout_s: 10.0
+  cpu_temp_warning_c: 75.0
+  cpu_temp_critical_c: 85.0
+
+optional:
+  display: true                       # HDMI display is optional
+  aws_iot: true                       # If true, cloud disconnection allows local operation without lockout
+
+log_level: "INFO"

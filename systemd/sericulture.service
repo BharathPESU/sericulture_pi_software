@@ -1,0 +1,49 @@
+[Unit]
+Description=Sericulture Edge-AI Monitoring and Control Controller
+Documentation=https://github.com/pashu-drishti/sericulture_pi_software
+# Order after filesystem is mounted, but DO NOT block on network-online
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+User=sericulture
+Group=sericulture
+SupplementaryGroups=gpio i2c video dialout
+
+# Working and environment directory
+WorkingDirectory=/opt/sericulture
+EnvironmentFile=-/etc/sericulture/sericulture.env
+Environment=PYTHONUNBUFFERED=1
+Environment=SERICULTURE_CONFIG_PATH=/etc/sericulture/device.yaml
+
+# Executable invocation inside python venv
+ExecStart=/opt/sericulture/venv/bin/python3 -m sericulture.main --config /etc/sericulture/device.yaml
+
+# Process restart policy
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+# Graceful termination policy: send SIGTERM and allow 15 seconds to safely shut off relays
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+FinalKillSignal=SIGKILL
+
+# Sandboxing and security hardening
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+StateDirectory=sericulture
+ConfigurationDirectory=sericulture
+RuntimeDirectory=sericulture
+
+# Standard output to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sericulture-edge
+
+[Install]
+WantedBy=multi-user.target

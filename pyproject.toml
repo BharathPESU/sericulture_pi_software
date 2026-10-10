@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "sericulture-edge"
+version = "0.1.0"
+description = "Sericulture Edge-AI monitoring and control system for Raspberry Pi 5"
+requires-python = ">=3.11"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Novabion", email = "engineering@novabion.com"},
+]
+
+dependencies = [
+    # GPIO (Pi 5 compatible)
+    "gpiozero>=2.0",
+    "lgpio>=0.2.2.0",
+    # Sensor
+    "sensirion-i2c-sht4x>=1.0.0",
+    "sensirion-i2c-driver>=1.0.0",
+    # Camera / Vision
+    "opencv-python-headless>=4.8.0",
+    "numpy>=1.26.0",
+    # AWS IoT
+    "awsiotsdk>=1.21.0",
+    # Config
+    "pyyaml>=6.0.1",
+    # Utilities
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.2.0",
+    "freezegun>=1.2.0",
+]
+
+[project.scripts]
+sericulture = "sericulture.main:main"
+
+[tool.setuptools.packages.find]
+where = ["app"]
+
+[tool.pytest.ini_options]
+pythonpath = ["app"]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "hardware: requires physical hardware (deselect with '-m \"not hardware\"')",
+    "integration: integration tests",
+    "fault_injection: fault injection tests",
+    "slow: long-running tests",
+]
