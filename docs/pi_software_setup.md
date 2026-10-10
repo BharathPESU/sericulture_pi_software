@@ -256,20 +256,33 @@ SERICULTURE_OPTIONAL_DISPLAY=true
 
 ### 5.2 Certificate Provisioning
 
-Copy your 3 AWS IoT Core certificate files to the secure certificates directory on the Pi:
+When you download your AWS IoT Core certificate, private key, and root CA on the Raspberry Pi, they will initially be saved in your `~/Downloads` (or `/home/pi/Downloads`) folder.
+
+Provision and secure them in `/etc/sericulture/certs` using:
 
 ```bash
+# 1. Create the certificate directory
 sudo mkdir -p /etc/sericulture/certs
 
-# Copy the files:
-sudo cp device.cert.pem /etc/sericulture/certs/device.cert.pem
-sudo cp device.private.key /etc/sericulture/certs/device.private.key
-sudo cp AmazonRootCA1.pem /etc/sericulture/certs/AmazonRootCA1.pem
-
-# Restrict permissions
-sudo chown -R sericulture:sericulture /etc/sericulture/certs
+# 2. Set directory ownership and permissions
+sudo chown sericulture:sericulture /etc/sericulture/certs
 sudo chmod 700 /etc/sericulture/certs
-sudo chmod 600 /etc/sericulture/certs/*
+
+# 3. Copy files with the correct ownership and permissions
+sudo install -o sericulture -g sericulture -m 600 \
+  /home/pi/Downloads/device.cert.pem \
+  /etc/sericulture/certs/device.cert.pem
+
+sudo install -o sericulture -g sericulture -m 600 \
+  /home/pi/Downloads/device.private.key \
+  /etc/sericulture/certs/device.private.key
+
+sudo install -o sericulture -g sericulture -m 600 \
+  /home/pi/Downloads/AmazonRootCA1.pem \
+  /etc/sericulture/certs/AmazonRootCA1.pem
+
+# 4. Verify the files and permissions
+sudo ls -la /etc/sericulture/certs
 ```
 
 ---
