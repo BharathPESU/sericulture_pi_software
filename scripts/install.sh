@@ -3,8 +3,9 @@
 # Sericulture Edge-AI Pi 5 Software Installation Script
 # ==============================================================================
 # Usage:
-#   sudo ./scripts/install.sh            # Standard production installation
+#   sudo ./scripts/install.sh            # Standard production installation (all-in-one)
 #   sudo ./scripts/install.sh --editable # Development installation with editable venv
+#   sudo ./scripts/install.sh --skip-apt # Skip apt system package installation
 # ==============================================================================
 
 set -euo pipefail
@@ -43,8 +44,14 @@ error_handler() {
   echo -e "${YELLOW}${BOLD}Troubleshooting suggestions:${NC}" >&2
 
   case "$CURRENT_STEP" in
+    *"system packages"*|*"build tools"*|*"APT"*)
+      echo "  * Check your internet connection or apt repository configuration:" >&2
+      echo "      sudo apt update" >&2
+      echo "  * If another package manager or unattended-upgrades process is running, wait for it or run:" >&2
+      echo "      sudo fuser -vki -k /var/lib/dpkg/lock-frontend" >&2
+      ;;
     *"prerequisites"*)
-      echo "  * Ensure Python 3.11+ is installed on your Raspberry Pi." >&2
+      echo "  * Ensure Python 3.11+ is installed on your Raspberry Pi: python3 --version" >&2
       echo "  * Run: sudo apt update && sudo apt install -y python3 python3-venv python3-pip python3-dev build-essential" >&2
       ;;
     *"service user"*)
@@ -55,10 +62,10 @@ error_handler() {
       echo "  * Check available disk space: df -h" >&2
       echo "  * Verify filesystem permissions for /opt, /var/lib, /etc." >&2
       ;;
-    *"virtual environment"*)
+    *"virtual environment"*|*"dependencies"*)
+      echo "  * If pip failed compiling lgpio, ensure swig and liblgpio-dev are installed:" >&2
+      echo "      sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev build-essential" >&2
       echo "  * If pip failed downloading packages, verify your internet connection on the Pi." >&2
-      echo "  * Ensure python3-venv and build tools are present:" >&2
-      echo "      sudo apt update && sudo apt install -y python3-venv python3-pip python3-dev build-essential" >&2
       echo "  * If OpenCV or NumPy wheels fail, install system libraries:" >&2
       echo "      sudo apt install -y libgl1 libglib2.0-0" >&2
       ;;
@@ -113,8 +120,53 @@ cd "$REPO_DIR" || {
   exit 1
 }
 
+# Parse CLI arguments
+EDITABLE_INSTALL=false
+SKIP_APT=false
+for arg in "$@"; do
+  case "$arg" in
+    --editable|-e)
+      EDITABLE_INSTALL=true
+      ;;
+    --skip-apt)
+      SKIP_APT=true
+      ;;
+  esac
+done
+
+# ------------------------------------------------------------------------------
+# 1. System Packages & Build Tools (APT)
+# ------------------------------------------------------------------------------
+if [ "$SKIP_APT" = false ] && command -v apt-get &>/dev/null; then
+  CURRENT_STEP="Installing system packages and build tools via APT"
+  log_step "[1/7] Installing system packages and hardware build tools (apt)..."
+  
+  export DEBIAN_FRONTEND=noninteractive
+  log_info "Updating APT package index..."
+  apt-get update -y || log_warn "apt-get update completed with warnings; continuing..."
+  
+  log_info "Installing compiler, SWIG, and Python development headers..."
+  apt-get install -y swig python3-dev build-essential python3-venv python3-pip libgl1 libglib2.0-0
+  
+  # Install Raspberry Pi GPIO hardware packages if available in apt repositories
+  for pkg in liblgpio-dev python3-lgpio i2c-tools; do
+    if apt-cache show "$pkg" &>/dev/null; then
+      log_info "Installing hardware package: $pkg..."
+      apt-get install -y "$pkg" || log_warn "Could not install $pkg; continuing..."
+    fi
+  done
+  log_success "System build tools and hardware packages installed successfully."
+elif [ "$SKIP_APT" = true ]; then
+  log_step "[1/7] Skipping APT package installation (--skip-apt requested)..."
+else
+  log_step "[1/7] Non-Debian system detected; skipping APT package installation..."
+fi
+
+# ------------------------------------------------------------------------------
+# Prerequisite Verification
+# ------------------------------------------------------------------------------
 CURRENT_STEP="Validating system prerequisites"
-log_step "Checking system prerequisites..."
+log_step "Validating system prerequisites..."
 
 # Check Python 3
 if ! command -v python3 &>/dev/null; then
@@ -156,20 +208,10 @@ INSTALL_DIR="/opt/sericulture"
 DATA_DIR="/var/lib/sericulture"
 CONFIG_DIR="/etc/sericulture"
 
-# Parse CLI arguments
-EDITABLE_INSTALL=false
-for arg in "$@"; do
-  case "$arg" in
-    --editable|-e)
-      EDITABLE_INSTALL=true
-      ;;
-  esac
-done
-
 # ------------------------------------------------------------------------------
-# 1. System User & Hardware Groups
+# 2. System User & Hardware Groups
 # ------------------------------------------------------------------------------
-log_step "[1/6] Setting up service user and hardware groups..."
+log_step "[2/7] Setting up service user and hardware groups..."
 if ! id "$SERVICE_USER" &>/dev/null; then
   useradd -r -s /usr/sbin/nologin -d "$INSTALL_DIR" -M "$SERVICE_USER"
   log_success "Created system service user '$SERVICE_USER'."
@@ -188,9 +230,9 @@ for grp in gpio i2c video dialout; do
 done
 
 # ------------------------------------------------------------------------------
-# 2. Hardened Directories
+# 3. Hardened Directories
 # ------------------------------------------------------------------------------
-log_step "[2/6] Setting up directories and permissions..."
+log_step "[3/7] Setting up directories and permissions..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$DATA_DIR"
 mkdir -p "$CONFIG_DIR/certs"
@@ -203,9 +245,9 @@ chmod 700 "$CONFIG_DIR/certs"
 log_success "Directories configured: $INSTALL_DIR, $DATA_DIR, $CONFIG_DIR."
 
 # ------------------------------------------------------------------------------
-# 3. Python Virtual Environment & Dependencies
+# 4. Python Virtual Environment & Dependencies
 # ------------------------------------------------------------------------------
-log_step "[3/6] Setting up Python virtual environment..."
+log_step "[4/7] Setting up Python virtual environment and dependencies..."
 # Check for corrupted or incomplete existing venv
 if [ -d "$INSTALL_DIR/venv" ] && [ ! -x "$INSTALL_DIR/venv/bin/pip" ]; then
   log_warn "Corrupted virtual environment detected. Rebuilding..."
@@ -223,7 +265,7 @@ fi
 log_info "Upgrading pip, setuptools, and wheel in virtual environment..."
 "$INSTALL_DIR/venv/bin/pip" install --upgrade --quiet pip setuptools wheel
 
-log_info "Installing sericulture-edge package and requirements..."
+log_info "Installing sericulture-edge package and requirements from pyproject.toml..."
 if [ "$EDITABLE_INSTALL" = true ]; then
   log_info "Running editable install (-e)..."
   "$INSTALL_DIR/venv/bin/pip" install -e .
@@ -234,17 +276,17 @@ fi
 log_success "Python package dependencies installed successfully."
 
 # ------------------------------------------------------------------------------
-# 4. Copy Application Source
+# 5. Copy Application Source
 # ------------------------------------------------------------------------------
-log_step "[4/6] Synchronizing application source files..."
+log_step "[5/7] Synchronizing application source files..."
 cp -r "$REPO_DIR/app/sericulture" "$INSTALL_DIR/"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 log_success "Source files deployed to $INSTALL_DIR."
 
 # ------------------------------------------------------------------------------
-# 5. Configuration & Certificates Deployment
+# 6. Configuration & Certificates Deployment
 # ------------------------------------------------------------------------------
-log_step "[5/6] Deploying device configuration and secrets..."
+log_step "[6/7] Deploying device configuration and secrets..."
 if [ ! -f "$CONFIG_DIR/device.yaml" ]; then
   cp "$REPO_DIR/config/device.example.yaml" "$CONFIG_DIR/device.yaml"
   chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/device.yaml"
@@ -281,9 +323,9 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 6. Systemd Service Registration
+# 7. Systemd Service Registration
 # ------------------------------------------------------------------------------
-log_step "[6/6] Registering systemd service..."
+log_step "[7/7] Registering systemd service..."
 if command -v systemctl &>/dev/null; then
   cp "$REPO_DIR/systemd/sericulture.service" /etc/systemd/system/sericulture.service
   chmod 644 /etc/systemd/system/sericulture.service

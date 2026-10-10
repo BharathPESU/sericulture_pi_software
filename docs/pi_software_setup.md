@@ -141,15 +141,16 @@ sudo ./scripts/install.sh
 ```
 
 **What `scripts/install.sh` automatically performs:**
-1. Creates unprivileged service user `sericulture` and assigns it to groups `gpio`, `i2c`, `video`, `dialout`.
-2. Creates hardened directories:
+1. Installs required system packages and hardware build tools via APT (`swig`, `liblgpio-dev`, `python3-dev`, `build-essential`, `python3-venv`, `python3-pip`, `libgl1`, `libglib2.0-0`, `i2c-tools`).
+2. Creates unprivileged service user `sericulture` and assigns it to groups `gpio`, `i2c`, `video`, `dialout`.
+3. Creates hardened directories:
    - Application: `/opt/sericulture` (mode 750)
    - Database / Outbox: `/var/lib/sericulture` (mode 750)
    - Configuration / TLS: `/etc/sericulture` (mode 700)
-3. Creates a Python virtual environment `/opt/sericulture/venv` and installs all dependencies (`gpiozero`, `lgpio`, `sensirion-i2c`, `awsiotsdk`, `opencv-python-headless`, etc.).
-4. Copies application source code into `/opt/sericulture/sericulture/`.
-5. Deploys `/etc/sericulture/device.yaml` and `/etc/sericulture/sericulture.env`.
-6. Installs and enables the `systemd` service (`/etc/systemd/system/sericulture.service`) to start on every boot.
+4. Creates a Python virtual environment `/opt/sericulture/venv` and installs all dependencies (`gpiozero`, `lgpio`, `sensirion-i2c`, `awsiotsdk`, `opencv-python-headless`, etc.).
+5. Copies application source code into `/opt/sericulture/sericulture/`.
+6. Deploys `/etc/sericulture/device.yaml`, `/etc/sericulture/sericulture.env`, and syncs TLS certificates from `certificates/` to `/etc/sericulture/certs/`.
+7. Installs and enables the `systemd` service (`/etc/systemd/system/sericulture.service`) to start on every boot.
 
 ---
 
