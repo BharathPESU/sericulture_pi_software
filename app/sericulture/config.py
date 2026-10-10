@@ -298,6 +298,7 @@ class AppConfig:
 _DEFAULT_CONFIG_PATHS = [
     "/etc/sericulture/device.yaml",
     "config/device.yaml",
+    "config/device.example.yaml",
 ]
 
 
@@ -308,8 +309,9 @@ def _find_config_path() -> Path:
         p = Path(env_path)
         if p.is_file():
             return p
-        raise ConfigurationError(
-            f"SERICULTURE_CONFIG_PATH={env_path} does not exist or is not a file"
+        logger.warning(
+            "SERICULTURE_CONFIG_PATH=%s does not exist; checking default search paths...",
+            env_path,
         )
     for candidate in _DEFAULT_CONFIG_PATHS:
         p = Path(candidate)
@@ -378,11 +380,73 @@ def _build_buzzer_patterns(raw: dict[str, Any]) -> dict[str, list[tuple[float, f
     return defaults
 
 
-def load_config(config_path: Path | str | None = None) -> AppConfig:
+def load_env_file(env_path: Path | str | None = None, override: bool = False) -> None:
+    """Load environment variables from a .env file into os.environ.
+
+    Searches in:
+      1. Explicit env_path or SERICULTURE_ENV_PATH
+      2. .env in current working directory
+      3. /etc/sericulture/sericulture.env
+    """
+    candidates: list[Path] = []
+    if env_path:
+        candidates.append(Path(env_path))
+    elif "SERICULTURE_ENV_PATH" in os.environ:
+        candidates.append(Path(os.environ["SERICULTURE_ENV_PATH"]))
+    else:
+        candidates.append(Path(".env"))
+        candidates.append(Path("/etc/sericulture/sericulture.env"))
+
+    for p in candidates:
+        if p.is_file():
+            logger.info("Loading environment variables from %s", p)
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip()
+                            if len(v) >= 2 and (
+                                (v[0] == '"' and v[-1] == '"')
+                                or (v[0] == "'" and v[-1] == "'")
+                            ):
+                                v = v[1:-1]
+                            if k and (override or k not in os.environ):
+                                os.environ[k] = v
+            except Exception as e:
+                logger.warning("Error reading environment file %s: %s", p, e)
+            break
+
+
+def _parse_bool(val: Any, default: bool) -> bool:
+    """Helper to parse a boolean from an env string or yaml value."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def load_config(
+    config_path: Path | str | None = None,
+    env_path: Path | str | None = None,
+    load_env: bool = False,
+) -> AppConfig:
     """Load and validate configuration from YAML file.
 
     Args:
         config_path: Explicit path, or None to auto-discover.
+        env_path: Optional explicit path to .env file to load.
+        load_env: Whether to automatically discover and load .env if present.
 
     Returns:
         Validated AppConfig instance.
@@ -390,6 +454,9 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
     Raises:
         ConfigurationError: If config is missing, invalid, or fails validation.
     """
+    if load_env or env_path or "SERICULTURE_ENV_PATH" in os.environ:
+        load_env_file(env_path, override=bool(env_path or "SERICULTURE_ENV_PATH" in os.environ))
+
     if config_path is None:
         path = _find_config_path()
     else:
@@ -414,8 +481,9 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
 
     # --- Device identity ---
     dev_raw = raw.get("device", {})
-    device_id = dev_raw.get("device_id") or os.environ.get("SERICULTURE_DEVICE_ID", "")
-    farm_id = dev_raw.get("farm_id") or os.environ.get("SERICULTURE_FARM_ID", "")
+    device_id = os.environ.get("SERICULTURE_DEVICE_ID") or dev_raw.get("device_id", "")
+    farm_id = os.environ.get("SERICULTURE_FARM_ID") or dev_raw.get("farm_id", "")
+    site_name = os.environ.get("SERICULTURE_SITE_NAME") or dev_raw.get("site_name", "default-site")
     if not device_id or device_id == "UNCONFIGURED" or device_id.startswith("changeme"):
         errors.append("device.device_id is required and must be set to a real value")
     if not farm_id or farm_id == "UNCONFIGURED" or farm_id.startswith("changeme"):
@@ -424,7 +492,7 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
     device = DeviceIdentity(
         device_id=device_id,
         farm_id=farm_id,
-        site_name=dev_raw.get("site_name", "default-site"),
+        site_name=site_name,
     )
 
     # --- Relay config ---
@@ -566,19 +634,19 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
     # --- Cloud (AWS IoT) ---
     cl_raw = raw.get("cloud", {})
     cloud = CloudConfig(
-        enabled=cl_raw.get("enabled", True),
-        endpoint=cl_raw.get("endpoint") or os.environ.get("AWS_IOT_ENDPOINT", ""),
-        region=cl_raw.get("region") or os.environ.get("AWS_IOT_REGION", "ap-south-1"),
-        cert_path=cl_raw.get("cert_path") or os.environ.get("AWS_IOT_CERT_PATH", ""),
-        key_path=cl_raw.get("key_path") or os.environ.get("AWS_IOT_KEY_PATH", ""),
-        root_ca_path=cl_raw.get("root_ca_path") or os.environ.get("AWS_IOT_ROOT_CA_PATH", ""),
-        client_id=cl_raw.get("client_id", ""),
-        topic_root=cl_raw.get("topic_root", "novabion/sericulture/v1"),
-        qos=int(cl_raw.get("qos", 1)),
-        ack_timeout_s=float(cl_raw.get("ack_timeout_s", 30.0)),
-        batch_size=int(cl_raw.get("batch_size", 10)),
-        batch_interval_s=float(cl_raw.get("batch_interval_s", 30.0)),
-        max_retry_count=int(cl_raw.get("max_retry_count", 100)),
+        enabled=_parse_bool(os.environ.get("AWS_IOT_ENABLED"), cl_raw.get("enabled", True)),
+        endpoint=os.environ.get("AWS_IOT_ENDPOINT") or cl_raw.get("endpoint", ""),
+        region=os.environ.get("AWS_IOT_REGION") or cl_raw.get("region", "ap-south-1"),
+        cert_path=os.environ.get("AWS_IOT_CERT_PATH") or cl_raw.get("cert_path", ""),
+        key_path=os.environ.get("AWS_IOT_KEY_PATH") or cl_raw.get("key_path", ""),
+        root_ca_path=os.environ.get("AWS_IOT_ROOT_CA_PATH") or cl_raw.get("root_ca_path", ""),
+        client_id=os.environ.get("AWS_IOT_CLIENT_ID") or cl_raw.get("client_id", ""),
+        topic_root=os.environ.get("AWS_IOT_TOPIC_ROOT") or cl_raw.get("topic_root", "novabion/sericulture/v1"),
+        qos=int(os.environ.get("AWS_IOT_QOS", cl_raw.get("qos", 1))),
+        ack_timeout_s=float(os.environ.get("AWS_IOT_ACK_TIMEOUT_S", cl_raw.get("ack_timeout_s", 30.0))),
+        batch_size=int(os.environ.get("AWS_IOT_BATCH_SIZE", cl_raw.get("batch_size", 10))),
+        batch_interval_s=float(os.environ.get("AWS_IOT_BATCH_INTERVAL_S", cl_raw.get("batch_interval_s", 30.0))),
+        max_retry_count=int(os.environ.get("AWS_IOT_MAX_RETRY_COUNT", cl_raw.get("max_retry_count", 100))),
         reconnect_backoff_base_s=float(cl_raw.get("reconnect_backoff_base_s", 1.0)),
         reconnect_backoff_max_s=float(cl_raw.get("reconnect_backoff_max_s", 300.0)),
     )
@@ -597,11 +665,11 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
     # --- Optional components ---
     opt_raw = raw.get("optional", {})
     optional = OptionalComponents(
-        display=opt_raw.get("display", True),
-        aws_iot=opt_raw.get("aws_iot", False),
+        display=_parse_bool(os.environ.get("SERICULTURE_OPTIONAL_DISPLAY"), opt_raw.get("display", True)),
+        aws_iot=_parse_bool(os.environ.get("SERICULTURE_OPTIONAL_AWS_IOT"), opt_raw.get("aws_iot", False)),
     )
 
-    log_level = raw.get("log_level") or os.environ.get("SERICULTURE_LOG_LEVEL", "INFO")
+    log_level = os.environ.get("SERICULTURE_LOG_LEVEL") or raw.get("log_level", "INFO")
 
     # --- Validate cloud credentials if cloud is enabled and not optional ---
     if cloud.enabled and not optional.aws_iot:

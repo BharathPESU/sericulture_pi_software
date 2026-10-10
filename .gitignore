@@ -1,0 +1,28 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Local configuration secrets, certificates, and databases
+.env
+*.db
+*.db-wal
+*.db-shm
+certificates/
+certs/
+*.key
+*.pem
+*.crt
+
+# IDEs
+.vscode/
+.idea/

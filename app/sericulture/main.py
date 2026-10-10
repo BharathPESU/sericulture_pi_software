@@ -376,7 +376,7 @@ def main() -> int:
     setup_logging(args.log_level)
 
     try:
-        config = load_config(args.config)
+        config = load_config(args.config, load_env=True)
     except Exception as e:
         logger.critical(f"FATAL: Configuration loading failed: {e}")
         return 1

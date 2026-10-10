@@ -67,6 +67,17 @@ if [ ! -f "$CONFIG_DIR/device.yaml" ]; then
   echo "Copied example config to $CONFIG_DIR/device.yaml. Please edit with real credentials!"
 fi
 
+if [ ! -f "$CONFIG_DIR/sericulture.env" ]; then
+  if [ -f ".env" ]; then
+    cp .env "$CONFIG_DIR/sericulture.env"
+  else
+    cp .env.example "$CONFIG_DIR/sericulture.env"
+  fi
+  chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/sericulture.env"
+  chmod 600 "$CONFIG_DIR/sericulture.env"
+  echo "Copied environment variables to $CONFIG_DIR/sericulture.env."
+fi
+
 # 6. Install systemd service
 echo "[6/6] Installing systemd service..."
 cp systemd/sericulture.service /etc/systemd/system/
