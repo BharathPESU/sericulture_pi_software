@@ -21,6 +21,7 @@ from sericulture.cloud.outbox_sync import OutboxSyncWorker
 from sericulture.config import AppConfig, load_config
 from sericulture.control.actuator_policy import EnvironmentalPolicy
 from sericulture.control.decision_engine import DecisionEngine
+from sericulture.control.safety_layer import SafetyLayer, SensorProvider
 from sericulture.diagnostics import (
     ConfigChecker,
     DiagnosticsRunner,
@@ -71,6 +72,10 @@ class SericultureApplication:
         self._sm = StateMachine()
 
         # 2. Hardware Drivers
+        # All drivers use lazy/mock backends: __init__ never raises even when
+        # hardware is absent. The check() method on each driver returns the
+        # correct DiagnosticStatus (MISSING/FAIL) so the boot supervisor can
+        # decide whether the fault is critical or optional.
         self._relays = RelayManager(config.relay)
         self._buzzer = BuzzerController(config.buzzer)
         self._sht40 = SHT40Sensor(config.sht40)
