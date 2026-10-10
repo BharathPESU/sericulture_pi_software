@@ -55,196 +55,81 @@ The controller runs on **Raspberry Pi OS Lite (64-bit Bookworm)** and coordinate
 
 ---
 
-## 3. Raspberry Pi OS Preparation & Kernel Configuration
+## 3. Fast-Track Automated Setup (Recommended)
 
-### 3.1 Base Operating System Installation
-1. Flash **Raspberry Pi OS Lite (64-bit)** (Debian Bookworm) using the Raspberry Pi Imager.
-2. In the OS customization settings:
-   - Configure hostname (e.g. `sericulture-pi-01`).
-   - Create local admin user (e.g. `bharath`).
-   - Configure Wi-Fi or Ethernet networking.
-   - Enable SSH.
+The automated installer eliminates manual copy-pasting and configures everything through a single command.
 
-### 3.2 Enable Hardware Interfaces (I²C and PCIe)
-Boot the Pi, SSH into the machine, and edit `/boot/firmware/config.txt`:
+### Step 1: Place AWS Certificates in `~/Downloads`
+When you create your AWS IoT Thing and download your certificates on the Raspberry Pi:
+* `device.cert.pem` (or `*certificate.pem.crt`)
+* `device.private.key` (or `*private.pem.key`)
+* `AmazonRootCA1.pem` *(Optional: If missing, the installer will automatically download it from Amazon Trust Services)*
 
-```bash
-sudo nano /boot/firmware/config.txt
-```
-
-Ensure the following configuration lines are present at the bottom of the file:
-
-```ini
-# Enable I2C Bus 1 for SHT40 sensor
-dtparam=i2c_arm=on
-dtparam=i2c_arm_baudrate=100000
-
-# Enable PCIe Gen 3 for Raspberry Pi AI HAT+ (Hailo-8)
-dtparam=pciex1
-dtparam=pciex1_gen=3
-
-# Camera auto-detect
-camera_auto_detect=1
-```
-
-Save the file and reboot:
-```bash
-sudo reboot
-```
-
-### 3.3 Install System Hardware Tools & Drivers
-After rebooting, install core packages:
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-pip python3-venv python3-dev git i2c-tools libgl1 libglib2.0-0 v4l-utils
-```
-
-### 3.4 Install Hailo-8 AI HAT+ Drivers
-Install the Raspberry Pi AI HAT+ driver stack:
-
-```bash
-sudo apt install -y hailo-all
-```
-
-Verify that the Hailo NPU is detected:
-```bash
-hailortcli fw-control identify
-```
-*Expected output: Firmware version and Hailo-8 device status.*
-
-### 3.5 Verify I²C Sensor Bus
-Check if the SHT40 temperature/humidity sensor responds on address `0x44`:
-
-```bash
-sudo i2cdetect -y 1
-```
-*You should see `44` at row `40`, column `4`.*
+Leave them in `~/Downloads` (or `/home/pi/Downloads`).
 
 ---
 
-## 4. Software Installation
-
-Clone the repository to your Raspberry Pi:
+### Step 2: Run the Smart Automated Installer
+Clone the repository and run `scripts/install.sh`:
 
 ```bash
 cd ~
-git clone https://github.com/novabion/sericulture_pi_software.git
+git clone https://github.com/BharathPESU/sericulture_pi_software.git
 cd sericulture_pi_software
-```
-
-### Option A: Production Automated Installation (Recommended)
-Run the root installer script:
-
-```bash
 sudo ./scripts/install.sh
 ```
 
-**What `scripts/install.sh` automatically performs:**
-1. Installs required system packages and hardware build tools via APT (`swig`, `liblgpio-dev`, `python3-dev`, `build-essential`, `python3-venv`, `python3-pip`, `libgl1`, `libglib2.0-0`, `i2c-tools`).
-2. Creates unprivileged service user `sericulture` and assigns it to groups `gpio`, `i2c`, `video`, `dialout`.
-3. Creates hardened directories:
-   - Application: `/opt/sericulture` (mode 750)
-   - Database / Outbox: `/var/lib/sericulture` (mode 750)
-   - Configuration / TLS: `/etc/sericulture` (mode 700)
-4. Creates a Python virtual environment `/opt/sericulture/venv` and installs all dependencies (`gpiozero`, `lgpio`, `sensirion-i2c`, `awsiotsdk`, `opencv-python-headless`, etc.).
-5. Copies application source code into `/opt/sericulture/sericulture/`.
-6. Deploys `/etc/sericulture/device.yaml`, `/etc/sericulture/sericulture.env`, and syncs TLS certificates from `certificates/` to `/etc/sericulture/certs/`.
-7. Installs and enables the `systemd` service (`/etc/systemd/system/sericulture.service`) to start on every boot.
+#### What `scripts/install.sh` Automatically Handles:
+1. **APT System Dependencies**: Installs `swig`, `liblgpio-dev`, `python3-dev`, `build-essential`, `python3-venv`, `libgl1`, `libglib2.0-0`, and `i2c-tools`.
+2. **Hardware Kernel Overlays**: Automatically configures `/boot/firmware/config.txt` for I²C (`dtparam=i2c_arm=on`), PCIe Gen 3 (`dtparam=pciex1_gen=3`), and camera auto-detection.
+3. **User & Group Security**: Creates service user `sericulture`, assigns hardware groups (`gpio`, `i2c`, `video`, `dialout`), and adds your user (`pi`) for easy terminal debugging.
+4. **Hardened Directories**: Sets up `/opt/sericulture` (mode 755), `/var/lib/sericulture` (mode 750), and `/etc/sericulture` (mode 700).
+5. **Python Virtual Environment**: Installs `sericulture-edge` package and compiles `lgpio` in `/opt/sericulture/venv`.
+6. **Certificate Auto-Discovery**: Finds the 3 certificate files in `~/Downloads`, copies them to `/etc/sericulture/certs/`, and applies `chmod 600`.
+7. **Interactive 30-Second Config Wizard**: Prompts you for your **AWS IoT Core Endpoint** and Device/Farm identifiers, then writes `/etc/sericulture/sericulture.env`.
+8. **Systemd Service Registration & Start**: Installs, enables, and starts `sericulture.service` automatically.
+9. **Live Smoke Test Diagnostics**: Verifies the Python runtime, TLS certificates, I²C SHT40 sensor (`0x44`), video camera (`/dev/video0`), and service status.
 
 ---
 
-### Option B: Local Development / Manual Setup
-If you want to test and develop without system service installation:
+## 4. Configuration Reference
+
+### 4.1 Environment Variables (`/etc/sericulture/sericulture.env`)
+The installer prompts you for core settings, but you can inspect or edit them at any time:
 
 ```bash
-# Create local virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install requirements
-pip install --upgrade pip
-pip install -e ".[dev]"
-
-# Run test suite to verify installation
-python3 -m pytest
+sudo nano /etc/sericulture/sericulture.env
 ```
-
----
-
-## 5. Configuration & Environment Variables
-
-The software uses a dual configuration system:
-- **`device.yaml`**: Hardware pin maps, environmental thresholds, and timing parameters.
-- **`.env` (or `/etc/sericulture/sericulture.env`)**: Device identity, AWS IoT Core endpoints, and X.509 certificate paths.
-
-### 5.1 Setting Up Environment Variables
-
-Create your local `.env` file from the provided template:
-
-```bash
-cp .env.example .env
-chmod 600 .env
-nano .env
-```
-
-Set the values:
 
 ```ini
 # ==============================================================================
-# Sericulture Edge-AI Pi 5 Controller — Environment Variables
+# Device & Farm Identity
 # ==============================================================================
-
-# ------------------------------------------------------------------------------
-# 1. Device & Farm Identity
-# ------------------------------------------------------------------------------
-# Must match your AWS IoT Core Thing Name exactly
 SERICULTURE_DEVICE_ID=SERI-PI5-001
 SERICULTURE_FARM_ID=FARM-KAR-042
 SERICULTURE_SITE_NAME=Rearing-Shed-A
 
-# ------------------------------------------------------------------------------
-# 2. AWS IoT Core Connection & Endpoints
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# AWS IoT Core Connection
+# ==============================================================================
 AWS_IOT_ENABLED=true
 AWS_IOT_ENDPOINT=a141iw69pz5kqa-ats.iot.ap-south-1.amazonaws.com
 AWS_IOT_REGION=ap-south-1
 AWS_IOT_CLIENT_ID=SERI-PI5-001
 
-# ------------------------------------------------------------------------------
-# 3. AWS IoT Core X.509 TLS Certificates
-# ------------------------------------------------------------------------------
-# Absolute paths to certificate files on the Raspberry Pi
+# ==============================================================================
+# Certificate Paths
+# ==============================================================================
 AWS_IOT_CERT_PATH=/etc/sericulture/certs/device.cert.pem
 AWS_IOT_KEY_PATH=/etc/sericulture/certs/device.private.key
 AWS_IOT_ROOT_CA_PATH=/etc/sericulture/certs/AmazonRootCA1.pem
 
-# ------------------------------------------------------------------------------
-# 4. MQTT Topics & Sync Options
-# ------------------------------------------------------------------------------
-AWS_IOT_TOPIC_ROOT=novabion/sericulture/v1
-AWS_IOT_QOS=1
-AWS_IOT_ACK_TIMEOUT_S=30.0
-AWS_IOT_BATCH_SIZE=20
-AWS_IOT_BATCH_INTERVAL_S=15.0
-AWS_IOT_MAX_RETRY_COUNT=50
-
-# ------------------------------------------------------------------------------
-# 5. Local Storage & Database Configuration
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# Storage & Autonomous Safety Flags
+# ==============================================================================
 SERICULTURE_DB_PATH=/var/lib/sericulture/sericulture.db
-SERICULTURE_MIN_FREE_DISK_MB=200
-
-# ------------------------------------------------------------------------------
-# 6. Configuration File & Runtime Settings
-# ------------------------------------------------------------------------------
 SERICULTURE_CONFIG_PATH=/etc/sericulture/device.yaml
 SERICULTURE_LOG_LEVEL=INFO
-
-# ------------------------------------------------------------------------------
-# 7. Hardware & Fault Behavior Flags
-# ------------------------------------------------------------------------------
-# If true, offline network status will not prevent local actuator control
 SERICULTURE_OPTIONAL_AWS_IOT=true
 SERICULTURE_OPTIONAL_DISPLAY=true
 ```
@@ -254,42 +139,9 @@ SERICULTURE_OPTIONAL_DISPLAY=true
 
 ---
 
-### 5.2 Certificate Provisioning
+### 4.2 Environmental Control Thresholds (`/etc/sericulture/device.yaml`)
 
-When you download your AWS IoT Core certificate, private key, and root CA on the Raspberry Pi, they will initially be saved in your `~/Downloads` (or `/home/pi/Downloads`) folder.
-
-Provision and secure them in `/etc/sericulture/certs` using:
-
-```bash
-# 1. Create the certificate directory
-sudo mkdir -p /etc/sericulture/certs
-
-# 2. Set directory ownership and permissions
-sudo chown sericulture:sericulture /etc/sericulture/certs
-sudo chmod 700 /etc/sericulture/certs
-
-# 3. Copy files with the correct ownership and permissions
-sudo install -o sericulture -g sericulture -m 600 \
-  /home/pi/Downloads/device.cert.pem \
-  /etc/sericulture/certs/device.cert.pem
-
-sudo install -o sericulture -g sericulture -m 600 \
-  /home/pi/Downloads/device.private.key \
-  /etc/sericulture/certs/device.private.key
-
-sudo install -o sericulture -g sericulture -m 600 \
-  /home/pi/Downloads/AmazonRootCA1.pem \
-  /etc/sericulture/certs/AmazonRootCA1.pem
-
-# 4. Verify the files and permissions
-sudo ls -la /etc/sericulture/certs
-```
-
----
-
-### 5.3 Reviewing Environmental Control Thresholds (`device.yaml`)
-
-Inspect `/etc/sericulture/device.yaml` (or `config/device.example.yaml`):
+Control thresholds and timing parameters are defined in `/etc/sericulture/device.yaml`:
 
 ```yaml
 control:
@@ -309,43 +161,43 @@ control:
 
 ---
 
-## 6. Testing, First Boot & Diagnostics
+## 5. Service Operation & Live Monitoring
 
-### 6.1 Execute Automated Test Suite
-Run the 39 unit, integration, and fault recovery tests:
+### 5.1 Service Management Commands
 
 ```bash
-python3 -m pytest
+# View live telemetry and diagnostic logs
+sudo journalctl -u sericulture -f
+
+# Check service status
+sudo systemctl status sericulture
+
+# Restart service (e.g. after editing device.yaml or .env)
+sudo systemctl restart sericulture
+
+# Stop service
+sudo systemctl stop sericulture
 ```
-*All 39 tests must pass.*
 
 ---
 
-### 6.2 Test Diagnostics Without Activating Loads
-Run a standalone hardware diagnostic probe:
+### 5.2 Manual Terminal Debug Mode
+
+To run the controller directly in your terminal with real-time debug output (without systemd):
 
 ```bash
-python3 -m sericulture.main --config config/device.example.yaml --log-level DEBUG
+sudo /opt/sericulture/venv/bin/python3 -m sericulture.main --config /etc/sericulture/device.yaml --log-level DEBUG
 ```
-
-**Check the console log output for each component:**
-- `sht40: PASS — Valid temperature and humidity reading`
-- `float_switch: PASS — Contact state WATER_OK`
-- `mains_detector: PASS — Mains power PRESENT`
-- `camera: PASS — Video capture device operational`
-- `hailo_device: PASS — Hailo-8 accelerator hardware detected on PCIe`
-- `relay_board: UNVERIFIABLE — GPIO control path OK, all channels commanded OFF`
-- `sqlite: PASS — Local database WAL mode operational`
-- `aws_iot: PASS — Connected to AWS IoT Core`
 
 ---
 
-### 6.3 Understanding Buzzer Acoustic Signals
-If any component fails during boot, the buzzer driver sounds a distinct non-blocking pattern:
+### 5.3 Acoustic Buzzer Fault Signals
+
+If any hardware component encounters a fault, the piezo buzzer sounds a distinct non-blocking acoustic pattern:
 
 | Beep Pattern | Fault Category | Meaning / Action Required |
 | :--- | :--- | :--- |
-| **1 long beep** | SHT40 Sensor | Check I²C wiring on pins 3 & 5 (`i2cdetect -y 1`). |
+| **1 long beep** | SHT40 Sensor | Check I²C wiring on pins 3 & 5 (`sudo i2cdetect -y 1`). |
 | **2 short beeps** | UVC Camera | Check USB camera connection (`lsusb`, `/dev/video0`). |
 | **3 short beeps** | Hailo-8 NPU | Check PCIe ribbon cable and `lspci`. |
 | **1 long + 2 short** | Safety Inputs | Water tank low (`WATER_LOW`) or AC mains power disconnected. |
@@ -355,67 +207,46 @@ If any component fails during boot, the buzzer driver sounds a distinct non-bloc
 
 ---
 
-## 7. Service Management (24/7 Production Operation)
+## 6. Troubleshooting & Diagnostics
 
-The application runs as a systemd service under the `sericulture` user:
+### I²C SHT40 Sensor Not Detected (`i2cdetect` shows empty)
+1. Verify wiring:
+   * SHT40 `VIN` -> Pi Pin 1 (3.3V)
+   * SHT40 `GND` -> Pi Pin 9 (Ground)
+   * SHT40 `SDA` -> Pi Pin 3 (BCM 2)
+   * SHT40 `SCL` -> Pi Pin 5 (BCM 3)
+2. Run live I²C detection:
+   ```bash
+   sudo i2cdetect -y 1
+   ```
+   *Expected: Address `44` displayed at row `40`, column `4`.*
 
-```bash
-# 1. Start the service
-sudo systemctl start sericulture.service
+### Camera Not Detected
+1. Check USB device enumeration:
+   ```bash
+   lsusb
+   v4l2-ctl --list-devices
+   ```
+2. Ensure `/dev/video0` is present.
 
-# 2. Check current status
-sudo systemctl status sericulture.service
+### Hailo-8 AI HAT+ Not Detected
+1. Verify PCIe connection:
+   ```bash
+   lspci
+   ```
+   *Should show: `Co-processor: Hailo Technologies Ltd. Hailo-8 AI Processor`.*
+2. Check Hailo runtime status:
+   ```bash
+   hailortcli fw-control identify
+   ```
 
-# 3. View live streaming application logs
-sudo journalctl -u sericulture.service -f
-
-# 4. Safely stop the service (forces all relays OFF before exit)
-sudo systemctl stop sericulture.service
-
-# 5. Restart the service
-sudo systemctl restart sericulture.service
-```
-
----
-
-## 8. Physical Commissioning & Safety Checklist
-
-Complete this checklist in order before placing live silkworms in the rearing shed:
-
-- [ ] **1. Power-Off Continuity Check:** With power disconnected, verify with a multimeter that all relay channels are open-circuit (`COM` to `NO` resistance = $\infty$).
-- [ ] **2. Single-Wire Disconnect Test:** Disconnect the relay signal ribbon cable while relay board is powered. Verify no relays energize.
-- [ ] **3. Boot Chatter Verification:** Power on the Raspberry Pi 5. Watch relay LEDs. Confirm that zero relay clicks or LED flickers occur while Linux boots.
-- [ ] **4. Float Switch Interlock:** With the mist water reservoir empty, confirm the diagnostic status reports `WATER_LOW`. Attempting manual mist actuation must be rejected with `SAFETY BLOCKED`. Fill the reservoir and confirm status transitions to `WATER_OK`.
-- [ ] **5. Mains Power Loss Emergency Shutoff:** Connect a 12V test light to Relay Channel 1 (Fan). Energize the fan. Disconnect AC mains input to the optocoupler. Verify the relay turns OFF in `< 50ms`. Reconnect mains and confirm the fan does not restart until the 5-second stabilization delay elapses.
-- [ ] **6. Camera & Inference Check:** Verify the vision pipeline maintains $\ge 15\text{ FPS}$ on Hailo-8 without throttling or thermal warnings (`cpu_temp < 75°C`).
-- [ ] **7. Agronomist Signoff:** Once environmental thresholds are verified, change `control.provisional: false` in `/etc/sericulture/device.yaml`.
-
----
-
-## 9. Troubleshooting & FAQ
-
-### Q1: The service exits immediately with code 2.
-**Cause:** Hardware diagnostic check failed for one of the required components.  
-**Fix:** Run `sudo journalctl -u sericulture.service -n 50 --no-pager` and look for `Boot diagnostics failed! Required components unhealthy: ...`. Check the physical wiring of the reported component.
-
-### Q2: SHT40 sensor shows `READ_ERROR` or CRC failure.
-**Cause:** Loose I²C wires or missing pull-up resistors on long cable runs.  
-**Fix:** Keep I²C cable length under 1 meter. Verify connection on Pin 3 (SDA) and Pin 5 (SCL). Test with `i2cdetect -y 1`.
-
-### Q3: Hailo-8 HAT+ is not recognized.
-**Cause:** PCIe Gen 3 overlay missing in `/boot/firmware/config.txt` or PCIe ribbon cable seated incorrectly.  
-**Fix:** Ensure `dtparam=pciex1` and `dtparam=pciex1_gen=3` are present in `/boot/firmware/config.txt`. Reseat the PCIe ribbon connector.
-
-### Q4: AWS IoT Core connection fails with TLS Handshake Error.
-**Cause:** Invalid certificate path, missing Root CA 1, or system clock out of sync.  
-**Fix:**
-1. Verify system time is synchronized via NTP: `timedatectl status`.
-2. Verify paths in `.env` match `/etc/sericulture/certs/`.
-3. Verify the certificate has been activated in the AWS IoT Core Console and the policy is attached.
-
-### Q5: How do I completely remove the software?
-Run the automated uninstaller:
-```bash
-sudo ./scripts/uninstall.sh
-```
-This stops the service, disables auto-boot, safely de-energizes all relays, and removes `/opt/sericulture`.
+### AWS IoT Core Connection Issues
+1. Test outbound TLS port 8883 connectivity:
+   ```bash
+   nc -zv <your-ats-endpoint>.iot.ap-south-1.amazonaws.com 8883
+   ```
+2. Verify certificate permissions:
+   ```bash
+   sudo ls -la /etc/sericulture/certs
+   ```
+   *Files should be owned by `sericulture:sericulture` with mode `-rw-------` (`600`).*

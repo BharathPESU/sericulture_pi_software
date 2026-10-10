@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Sericulture Edge-AI Pi 5 Software Installation Script
+# Sericulture Edge-AI Pi 5 Software — Smart Automated Installer
 # ==============================================================================
 # Usage:
-#   sudo ./scripts/install.sh            # Standard production installation (all-in-one)
-#   sudo ./scripts/install.sh --editable # Development installation with editable venv
-#   sudo ./scripts/install.sh --skip-apt # Skip apt system package installation
+#   sudo ./scripts/install.sh                  # Interactive all-in-one setup
+#   sudo ./scripts/install.sh --non-interactive # Automated setup using existing .env
+#   sudo ./scripts/install.sh --skip-apt       # Skip APT package installation
+#   sudo ./scripts/install.sh --editable       # Development install (editable venv)
 # ==============================================================================
 
 set -euo pipefail
@@ -16,6 +17,7 @@ if [ -t 1 ]; then
   GREEN='\033[0;32m'
   YELLOW='\033[1;33m'
   BLUE='\033[0;34m'
+  CYAN='\033[0;36m'
   BOLD='\033[1m'
   NC='\033[0m' # No Color
 else
@@ -23,6 +25,7 @@ else
   GREEN=''
   YELLOW=''
   BLUE=''
+  CYAN=''
   BOLD=''
   NC=''
 fi
@@ -50,6 +53,9 @@ error_handler() {
       echo "  * If another package manager or unattended-upgrades process is running, wait for it or run:" >&2
       echo "      sudo fuser -vki -k /var/lib/dpkg/lock-frontend" >&2
       ;;
+    *"hardware kernel"*|*"config.txt"*)
+      echo "  * Check filesystem permissions on /boot/firmware/config.txt or /boot/config.txt." >&2
+      ;;
     *"prerequisites"*)
       echo "  * Ensure Python 3.11+ is installed on your Raspberry Pi: python3 --version" >&2
       echo "  * Run: sudo apt update && sudo apt install -y python3 python3-venv python3-pip python3-dev build-essential" >&2
@@ -63,11 +69,14 @@ error_handler() {
       echo "  * Verify filesystem permissions for /opt, /var/lib, /etc." >&2
       ;;
     *"virtual environment"*|*"dependencies"*)
-      echo "  * If pip failed compiling lgpio, ensure swig and liblgpio-dev are installed:" >&2
+      echo "  * If pip failed compiling lgpio, verify swig and liblgpio-dev are installed:" >&2
       echo "      sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev build-essential" >&2
       echo "  * If pip failed downloading packages, verify your internet connection on the Pi." >&2
       echo "  * If OpenCV or NumPy wheels fail, install system libraries:" >&2
       echo "      sudo apt install -y libgl1 libglib2.0-0" >&2
+      ;;
+    *"certificates"*)
+      echo "  * Place your 3 certificate files in ~/Downloads or /etc/sericulture/certs/." >&2
       ;;
     *"systemd"*)
       echo "  * Verify that systemd is active on your Pi: systemctl is-system-running" >&2
@@ -123,6 +132,8 @@ cd "$REPO_DIR" || {
 # Parse CLI arguments
 EDITABLE_INSTALL=false
 SKIP_APT=false
+NON_INTERACTIVE=false
+
 for arg in "$@"; do
   case "$arg" in
     --editable|-e)
@@ -130,6 +141,9 @@ for arg in "$@"; do
       ;;
     --skip-apt)
       SKIP_APT=true
+      ;;
+    --non-interactive|--yes|-y)
+      NON_INTERACTIVE=true
       ;;
   esac
 done
@@ -139,14 +153,14 @@ done
 # ------------------------------------------------------------------------------
 if [ "$SKIP_APT" = false ] && command -v apt-get &>/dev/null; then
   CURRENT_STEP="Installing system packages and build tools via APT"
-  log_step "[1/7] Installing system packages and hardware build tools (apt)..."
+  log_step "[1/8] Installing system packages and hardware build tools (apt)..."
   
   export DEBIAN_FRONTEND=noninteractive
   log_info "Updating APT package index..."
   apt-get update -y || log_warn "apt-get update completed with warnings; continuing..."
   
-  log_info "Installing compiler, SWIG, and Python development headers..."
-  apt-get install -y swig python3-dev build-essential python3-venv python3-pip libgl1 libglib2.0-0
+  log_info "Installing compiler, SWIG, curl, and Python development headers..."
+  apt-get install -y swig python3-dev build-essential python3-venv python3-pip libgl1 libglib2.0-0 curl
   
   # Install Raspberry Pi GPIO hardware packages if available in apt repositories
   for pkg in liblgpio-dev python3-lgpio i2c-tools; do
@@ -157,9 +171,48 @@ if [ "$SKIP_APT" = false ] && command -v apt-get &>/dev/null; then
   done
   log_success "System build tools and hardware packages installed successfully."
 elif [ "$SKIP_APT" = true ]; then
-  log_step "[1/7] Skipping APT package installation (--skip-apt requested)..."
+  log_step "[1/8] Skipping APT package installation (--skip-apt requested)..."
 else
-  log_step "[1/7] Non-Debian system detected; skipping APT package installation..."
+  log_step "[1/8] Non-Debian system detected; skipping APT package installation..."
+fi
+
+# ------------------------------------------------------------------------------
+# 2. Hardware Overlays & Kernel Configuration (/boot/firmware/config.txt)
+# ------------------------------------------------------------------------------
+CURRENT_STEP="Configuring hardware kernel overlays"
+BOOT_CONFIG=""
+if [ -f "/boot/firmware/config.txt" ]; then
+  BOOT_CONFIG="/boot/firmware/config.txt"
+elif [ -f "/boot/config.txt" ]; then
+  BOOT_CONFIG="/boot/config.txt"
+fi
+
+REBOOT_RECOMMENDED=false
+if [ -n "$BOOT_CONFIG" ]; then
+  log_step "[2/8] Checking Raspberry Pi hardware overlays ($BOOT_CONFIG)..."
+  
+  APPEND_ENTRIES=()
+  grep -q "^dtparam=i2c_arm=on" "$BOOT_CONFIG" || APPEND_ENTRIES+=("dtparam=i2c_arm=on" "dtparam=i2c_arm_baudrate=100000")
+  grep -q "^dtparam=pciex1" "$BOOT_CONFIG" || APPEND_ENTRIES+=("dtparam=pciex1")
+  grep -q "^dtparam=pciex1_gen=3" "$BOOT_CONFIG" || APPEND_ENTRIES+=("dtparam=pciex1_gen=3")
+  grep -q "^camera_auto_detect=1" "$BOOT_CONFIG" || APPEND_ENTRIES+=("camera_auto_detect=1")
+  
+  if [ "${#APPEND_ENTRIES[@]}" -gt 0 ]; then
+    log_info "Enabling hardware interfaces (I2C, PCIe Gen3, Camera) in $BOOT_CONFIG..."
+    {
+      echo ""
+      echo "# Sericulture Edge-AI Pi 5 Hardware Overlays"
+      for entry in "${APPEND_ENTRIES[@]}"; do
+        echo "$entry"
+      done
+    } >> "$BOOT_CONFIG"
+    REBOOT_RECOMMENDED=true
+    log_success "Hardware overlays enabled. (Reboot recommended after install)."
+  else
+    log_success "Hardware overlays (I2C, PCIe Gen 3, Camera) already active in $BOOT_CONFIG."
+  fi
+else
+  log_step "[2/8] Boot config not found (non-Raspberry Pi environment); skipping overlay setup."
 fi
 
 # ------------------------------------------------------------------------------
@@ -209,9 +262,10 @@ DATA_DIR="/var/lib/sericulture"
 CONFIG_DIR="/etc/sericulture"
 
 # ------------------------------------------------------------------------------
-# 2. System User & Hardware Groups
+# 3. System User & Hardware Groups
 # ------------------------------------------------------------------------------
-log_step "[2/7] Setting up service user and hardware groups..."
+CURRENT_STEP="Setting up service user and hardware groups"
+log_step "[3/8] Setting up service user and hardware groups..."
 if ! id "$SERVICE_USER" &>/dev/null; then
   useradd -r -s /usr/sbin/nologin -d "$INSTALL_DIR" -M "$SERVICE_USER"
   log_success "Created system service user '$SERVICE_USER'."
@@ -229,16 +283,22 @@ for grp in gpio i2c video dialout; do
   fi
 done
 
-# Add invoking sudo user (e.g. pi) to sericulture group for easy inspection
+# Add invoking sudo user (e.g. pi) to sericulture and hardware groups for easy manual inspection
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
   usermod -aG "$SERVICE_USER" "$SUDO_USER" 2>/dev/null || true
-  log_info "Added user '$SUDO_USER' to group '$SERVICE_USER'."
+  for grp in gpio i2c video dialout; do
+    if getent group "$grp" &>/dev/null; then
+      usermod -aG "$grp" "$SUDO_USER" 2>/dev/null || true
+    fi
+  done
+  log_info "Added user '$SUDO_USER' to group '$SERVICE_USER' and hardware groups."
 fi
 
 # ------------------------------------------------------------------------------
-# 3. Hardened Directories
+# 4. Hardened Directories
 # ------------------------------------------------------------------------------
-log_step "[3/7] Setting up directories and permissions..."
+CURRENT_STEP="Setting up directories and permissions"
+log_step "[4/8] Setting up directories and permissions..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$DATA_DIR"
 mkdir -p "$CONFIG_DIR/certs"
@@ -251,9 +311,10 @@ chmod 700 "$CONFIG_DIR/certs"
 log_success "Directories configured: $INSTALL_DIR (755), $DATA_DIR (750), $CONFIG_DIR (700)."
 
 # ------------------------------------------------------------------------------
-# 4. Python Virtual Environment & Dependencies
+# 5. Python Virtual Environment & Dependencies
 # ------------------------------------------------------------------------------
-log_step "[4/7] Setting up Python virtual environment and dependencies..."
+CURRENT_STEP="Setting up Python virtual environment and dependencies"
+log_step "[5/8] Setting up Python virtual environment and dependencies..."
 # Check for corrupted or incomplete existing venv
 if [ -d "$INSTALL_DIR/venv" ] && [ ! -x "$INSTALL_DIR/venv/bin/pip" ]; then
   log_warn "Corrupted virtual environment detected. Rebuilding..."
@@ -282,75 +343,281 @@ fi
 log_success "Python package dependencies installed successfully."
 
 # ------------------------------------------------------------------------------
-# 5. Copy Application Source
+# 6. Copy Application Source
 # ------------------------------------------------------------------------------
-log_step "[5/7] Synchronizing application source files..."
+CURRENT_STEP="Synchronizing application source files"
+log_step "[6/8] Synchronizing application source files..."
 cp -r "$REPO_DIR/app/sericulture" "$INSTALL_DIR/"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 log_success "Source files deployed to $INSTALL_DIR."
 
 # ------------------------------------------------------------------------------
-# 6. Configuration & Certificates Deployment
+# 7. Automated Certificate Discovery & Configuration Wizard
 # ------------------------------------------------------------------------------
-log_step "[6/7] Deploying device configuration and secrets..."
+CURRENT_STEP="Configuring certificates and environment"
+log_step "[7/8] Provisioning TLS certificates and environment configuration..."
+
+# 7.1 Auto-Discover and Install Certificates from Downloads or Repository
+CERT_DIR="$CONFIG_DIR/certs"
+USER_HOME=$(eval echo "~${SUDO_USER:-$USER}")
+SEARCH_DIRS=("$USER_HOME/Downloads" "/home/pi/Downloads" "$REPO_DIR/certificates" "$REPO_DIR")
+
+log_info "Checking for AWS IoT Core certificates..."
+
+# Look for device certificate (*.cert.pem or *certificate.pem.crt)
+if [ ! -f "$CERT_DIR/device.cert.pem" ]; then
+  for dir in "${SEARCH_DIRS[@]}"; do
+    if [ -d "$dir" ]; then
+      MATCH=$(find "$dir" -maxdepth 1 \( -name "device.cert.pem" -o -name "*certificate.pem.crt" -o -name "*.cert.pem" \) 2>/dev/null | head -n 1 || true)
+      if [ -n "$MATCH" ] && [ -f "$MATCH" ]; then
+        log_info "Auto-detected device certificate: $MATCH"
+        install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 "$MATCH" "$CERT_DIR/device.cert.pem"
+        break
+      fi
+    fi
+  done
+fi
+
+# Look for private key (*.private.key or *private.pem.key)
+if [ ! -f "$CERT_DIR/device.private.key" ]; then
+  for dir in "${SEARCH_DIRS[@]}"; do
+    if [ -d "$dir" ]; then
+      MATCH=$(find "$dir" -maxdepth 1 \( -name "device.private.key" -o -name "*private.pem.key" -o -name "*.private.key" \) 2>/dev/null | head -n 1 || true)
+      if [ -n "$MATCH" ] && [ -f "$MATCH" ]; then
+        log_info "Auto-detected private key: $MATCH"
+        install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 "$MATCH" "$CERT_DIR/device.private.key"
+        break
+      fi
+    fi
+  done
+fi
+
+# Look for AmazonRootCA1.pem (or auto-download from Amazon Trust Services)
+if [ ! -f "$CERT_DIR/AmazonRootCA1.pem" ]; then
+  for dir in "${SEARCH_DIRS[@]}"; do
+    if [ -d "$dir" ]; then
+      MATCH=$(find "$dir" -maxdepth 1 \( -name "AmazonRootCA1.pem" -o -name "Amazon-root-CA-1.pem" -o -name "*RootCA1*.pem" \) 2>/dev/null | head -n 1 || true)
+      if [ -n "$MATCH" ] && [ -f "$MATCH" ]; then
+        log_info "Auto-detected Root CA: $MATCH"
+        install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 "$MATCH" "$CERT_DIR/AmazonRootCA1.pem"
+        break
+      fi
+    fi
+  done
+  
+  # Auto-download Amazon Root CA if missing and internet is accessible
+  if [ ! -f "$CERT_DIR/AmazonRootCA1.pem" ] && command -v curl &>/dev/null; then
+    log_info "Downloading AmazonRootCA1.pem from Amazon Trust Services..."
+    if curl -sSL -o "$CERT_DIR/AmazonRootCA1.pem" "https://www.amazontrust.com/repository/AmazonRootCA1.pem"; then
+      chown "$SERVICE_USER:$SERVICE_USER" "$CERT_DIR/AmazonRootCA1.pem"
+      chmod 600 "$CERT_DIR/AmazonRootCA1.pem"
+      log_success "Downloaded and secured AmazonRootCA1.pem."
+    fi
+  fi
+fi
+
+# Check certificate installation status
+if [ -f "$CERT_DIR/device.cert.pem" ] && [ -f "$CERT_DIR/device.private.key" ] && [ -f "$CERT_DIR/AmazonRootCA1.pem" ]; then
+  log_success "All 3 AWS IoT Core TLS certificate files are in place (/etc/sericulture/certs/)."
+else
+  log_warn "One or more certificates were not found in ~/Downloads. You can copy them later to $CERT_DIR/."
+fi
+
+# 7.2 Deploy default device.yaml configuration
 if [ ! -f "$CONFIG_DIR/device.yaml" ]; then
   cp "$REPO_DIR/config/device.example.yaml" "$CONFIG_DIR/device.yaml"
   chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/device.yaml"
   chmod 600 "$CONFIG_DIR/device.yaml"
-  log_success "Deployed default configuration to $CONFIG_DIR/device.yaml."
+  log_success "Deployed default hardware configuration to $CONFIG_DIR/device.yaml."
 else
-  log_info "Existing configuration $CONFIG_DIR/device.yaml preserved."
+  log_info "Preserved existing $CONFIG_DIR/device.yaml."
 fi
 
-if [ ! -f "$CONFIG_DIR/sericulture.env" ]; then
+# 7.3 Smart / Interactive Environment Configuration Wizard
+if [ ! -f "$CONFIG_DIR/sericulture.env" ] || grep -q "changeme-ats" "$CONFIG_DIR/sericulture.env" 2>/dev/null; then
+  # Determine base values from existing .env if available
+  BASE_ENV="$REPO_DIR/.env"
+  [ ! -f "$BASE_ENV" ] && BASE_ENV="$REPO_DIR/.env.example"
+
+  DEF_DEV_ID="SERI-PI5-001"
+  DEF_FARM_ID="FARM-KAR-042"
+  DEF_SITE="Rearing-Shed-A"
+  DEF_ENDPOINT=""
+  DEF_REGION="ap-south-1"
+
   if [ -f "$REPO_DIR/.env" ]; then
-    cp "$REPO_DIR/.env" "$CONFIG_DIR/sericulture.env"
-    log_success "Deployed environment configuration from .env to $CONFIG_DIR/sericulture.env."
-  else
-    cp "$REPO_DIR/.env.example" "$CONFIG_DIR/sericulture.env"
-    log_success "Deployed default environment configuration from .env.example to $CONFIG_DIR/sericulture.env."
+    DEF_DEV_ID=$(grep -E "^SERICULTURE_DEVICE_ID=" "$REPO_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "SERI-PI5-001")
+    DEF_FARM_ID=$(grep -E "^SERICULTURE_FARM_ID=" "$REPO_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "FARM-KAR-042")
+    DEF_SITE=$(grep -E "^SERICULTURE_SITE_NAME=" "$REPO_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "Rearing-Shed-A")
+    DEF_ENDPOINT=$(grep -E "^AWS_IOT_ENDPOINT=" "$REPO_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "")
+    DEF_REGION=$(grep -E "^AWS_IOT_REGION=" "$REPO_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "ap-south-1")
+    # Ignore placeholder in default
+    [[ "$DEF_ENDPOINT" == *"changeme"* ]] && DEF_ENDPOINT=""
   fi
+
+  # Interactive prompt if terminal attached and not non-interactive
+  if [ "$NON_INTERACTIVE" = false ] && [ -t 0 ]; then
+    echo ""
+    echo -e "${CYAN}${BOLD}----------------------------------------------------------------------${NC}"
+    echo -e "${CYAN}${BOLD}           Interactive Configuration Wizard (30 Seconds)              ${NC}"
+    echo -e "${CYAN}${BOLD}----------------------------------------------------------------------${NC}"
+    echo -e "Press [Enter] to accept default values in brackets.\n"
+
+    read -r -p " [?] Device ID [$DEF_DEV_ID]: " INPUT_DEV_ID
+    INPUT_DEV_ID="${INPUT_DEV_ID:-$DEF_DEV_ID}"
+
+    read -r -p " [?] Farm ID [$DEF_FARM_ID]: " INPUT_FARM_ID
+    INPUT_FARM_ID="${INPUT_FARM_ID:-$DEF_FARM_ID}"
+
+    read -r -p " [?] Shed / Site Name [$DEF_SITE]: " INPUT_SITE
+    INPUT_SITE="${INPUT_SITE:-$DEF_SITE}"
+
+    DEF_PROMPT="e.g., a141iw69pz5kqa-ats.iot.ap-south-1.amazonaws.com"
+    [ -n "$DEF_ENDPOINT" ] && DEF_PROMPT="$DEF_ENDPOINT"
+    read -r -p " [?] AWS IoT Core Data-ATS Endpoint [$DEF_PROMPT]: " INPUT_ENDPOINT
+    INPUT_ENDPOINT="${INPUT_ENDPOINT:-$DEF_ENDPOINT}"
+
+    read -r -p " [?] AWS Region [$DEF_REGION]: " INPUT_REGION
+    INPUT_REGION="${INPUT_REGION:-$DEF_REGION}"
+  else
+    INPUT_DEV_ID="$DEF_DEV_ID"
+    INPUT_FARM_ID="$DEF_FARM_ID"
+    INPUT_SITE="$DEF_SITE"
+    INPUT_ENDPOINT="$DEF_ENDPOINT"
+    INPUT_REGION="$DEF_REGION"
+  fi
+
+  [ -z "$INPUT_ENDPOINT" ] && INPUT_ENDPOINT="changeme-ats.iot.ap-south-1.amazonaws.com"
+
+  # Write /etc/sericulture/sericulture.env
+  cat <<EOF > "$CONFIG_DIR/sericulture.env"
+# ==============================================================================
+# Sericulture Edge-AI Pi 5 Controller — Environment Variables
+# Auto-generated by install.sh on $(date -u +"%Y-%m-%d %H:%M:%SZ")
+# ==============================================================================
+
+# Device & Farm Identity
+SERICULTURE_DEVICE_ID=${INPUT_DEV_ID}
+SERICULTURE_FARM_ID=${INPUT_FARM_ID}
+SERICULTURE_SITE_NAME=${INPUT_SITE}
+
+# AWS IoT Core Connection
+AWS_IOT_ENABLED=true
+AWS_IOT_ENDPOINT=${INPUT_ENDPOINT}
+AWS_IOT_REGION=${INPUT_REGION}
+AWS_IOT_CLIENT_ID=${INPUT_DEV_ID}
+
+# TLS Certificate Paths
+AWS_IOT_CERT_PATH=/etc/sericulture/certs/device.cert.pem
+AWS_IOT_KEY_PATH=/etc/sericulture/certs/device.private.key
+AWS_IOT_ROOT_CA_PATH=/etc/sericulture/certs/AmazonRootCA1.pem
+
+# MQTT Topics & Sync Options
+AWS_IOT_TOPIC_ROOT=novabion/sericulture/v1
+AWS_IOT_QOS=1
+AWS_IOT_ACK_TIMEOUT_S=30.0
+AWS_IOT_BATCH_SIZE=20
+AWS_IOT_BATCH_INTERVAL_S=15.0
+AWS_IOT_MAX_RETRY_COUNT=50
+
+# Storage & Runtime Paths
+SERICULTURE_DB_PATH=/var/lib/sericulture/sericulture.db
+SERICULTURE_MIN_FREE_DISK_MB=200
+SERICULTURE_CONFIG_PATH=/etc/sericulture/device.yaml
+SERICULTURE_LOG_LEVEL=INFO
+
+# Safety & Autonomous Fallback Flags
+SERICULTURE_OPTIONAL_AWS_IOT=true
+SERICULTURE_OPTIONAL_DISPLAY=true
+EOF
+
   chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/sericulture.env"
   chmod 600 "$CONFIG_DIR/sericulture.env"
+  log_success "Generated configuration at $CONFIG_DIR/sericulture.env (mode 600)."
 else
-  log_info "Existing environment file $CONFIG_DIR/sericulture.env preserved."
-fi
-
-# Synchronize local certificates folder if present
-if [ -d "$REPO_DIR/certificates" ] && [ -n "$(find "$REPO_DIR/certificates" -type f 2>/dev/null)" ]; then
-  log_info "Found local certificates in $REPO_DIR/certificates. Copying to $CONFIG_DIR/certs/..."
-  cp -r "$REPO_DIR/certificates"/* "$CONFIG_DIR/certs/" 2>/dev/null || true
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/certs"
-  chmod 700 "$CONFIG_DIR/certs"
-  chmod 600 "$CONFIG_DIR/certs"/* 2>/dev/null || true
-  log_success "Certificates synchronized to $CONFIG_DIR/certs/ with 600 permissions."
-else
-  log_info "No local certificates in $REPO_DIR/certificates to copy."
+  log_info "Preserved existing configuration $CONFIG_DIR/sericulture.env."
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Systemd Service Registration
+# 8. Systemd Service Registration & Start
 # ------------------------------------------------------------------------------
-log_step "[7/7] Registering systemd service..."
+CURRENT_STEP="Registering systemd service"
+log_step "[8/8] Registering systemd service..."
 if command -v systemctl &>/dev/null; then
   cp "$REPO_DIR/systemd/sericulture.service" /etc/systemd/system/sericulture.service
   chmod 644 /etc/systemd/system/sericulture.service
   systemctl daemon-reload
   systemctl enable sericulture.service
   log_success "Service 'sericulture.service' installed and enabled on boot."
+
+  # Attempt start
+  log_info "Starting sericulture.service..."
+  systemctl restart sericulture.service || true
 else
-  log_warn "systemctl not found. Skipped systemd service installation."
+  log_warn "systemctl not found. Skipped systemd service registration."
 fi
 
 # ------------------------------------------------------------------------------
-# Post-installation Verification
+# Post-Installation Hardware & Health Smoke Test
 # ------------------------------------------------------------------------------
 CURRENT_STEP="Post-installation verification"
-log_step "Verifying installation integrity..."
+echo ""
+echo -e "${CYAN}${BOLD}======================================================================${NC}"
+echo -e "${CYAN}${BOLD}           System & Hardware Smoke Test Diagnostics                   ${NC}"
+echo -e "${CYAN}${BOLD}======================================================================${NC}"
+
+# 1. Python Venv Import Test
 if "$INSTALL_DIR/venv/bin/python3" -c "import sericulture" &>/dev/null; then
-  log_success "Verification passed: sericulture package imports cleanly in venv."
+  echo -e "  [${GREEN}OK${NC}] Python Runtime:       Package 'sericulture' imports cleanly"
 else
-  log_warn "Could not import sericulture directly in venv; check /opt/sericulture permissions."
+  echo -e "  [${RED}FAIL${NC}] Python Runtime:     Could not import 'sericulture' in venv"
+fi
+
+# 2. TLS Certificates Check
+CERT_COUNT=0
+[ -f "$CONFIG_DIR/certs/device.cert.pem" ] && ((CERT_COUNT++)) || true
+[ -f "$CONFIG_DIR/certs/device.private.key" ] && ((CERT_COUNT++)) || true
+[ -f "$CONFIG_DIR/certs/AmazonRootCA1.pem" ] && ((CERT_COUNT++)) || true
+
+if [ "$CERT_COUNT" -eq 3 ]; then
+  echo -e "  [${GREEN}OK${NC}] TLS Certificates:     All 3 certificates verified in $CONFIG_DIR/certs/"
+else
+  echo -e "  [${YELLOW}WARN${NC}] TLS Certificates:   $CERT_COUNT/3 certs present in $CONFIG_DIR/certs/"
+fi
+
+# 3. AWS Endpoint Configuration
+if grep -q "changeme-ats" "$CONFIG_DIR/sericulture.env" 2>/dev/null; then
+  echo -e "  [${YELLOW}WARN${NC}] AWS IoT Endpoint:   Still contains placeholder; edit $CONFIG_DIR/sericulture.env"
+else
+  ENDPOINT_VAL=$(grep -E "^AWS_IOT_ENDPOINT=" "$CONFIG_DIR/sericulture.env" | cut -d'=' -f2- || echo "")
+  echo -e "  [${GREEN}OK${NC}] AWS IoT Endpoint:     $ENDPOINT_VAL"
+fi
+
+# 4. SHT40 I2C Hardware Bus Check
+if command -v i2cdetect &>/dev/null; then
+  if i2cdetect -y 1 2>/dev/null | grep -q " 44 "; then
+    echo -e "  [${GREEN}OK${NC}] SHT40 Sensor:         Detected on I2C bus 1 at address 0x44"
+  else
+    echo -e "  [${YELLOW}WARN${NC}] SHT40 Sensor:       Not detected on I2C address 0x44 (verify pin 3 & 5 wiring)"
+  fi
+else
+  echo -e "  [${BLUE}INFO${NC}] SHT40 Sensor:       i2cdetect not installed; skipped live hardware check"
+fi
+
+# 5. UVC Video Camera Check
+if [ -e "/dev/video0" ]; then
+  echo -e "  [${GREEN}OK${NC}] Camera:               Video device found at /dev/video0"
+else
+  echo -e "  [${YELLOW}WARN${NC}] Camera:             No camera detected at /dev/video0 (connect USB/CSI camera)"
+fi
+
+# 6. Service Status
+if command -v systemctl &>/dev/null; then
+  if systemctl is-active --quiet sericulture.service; then
+    echo -e "  [${GREEN}OK${NC}] Background Service:  sericulture.service is ACTIVE & RUNNING"
+  else
+    echo -e "  [${YELLOW}INFO${NC}] Background Service:  Installed and enabled (Run: sudo systemctl start sericulture)"
+  fi
 fi
 
 echo ""
@@ -358,21 +625,22 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}${BOLD}     Sericulture Edge-AI Software Installation Complete!             ${NC}"
 echo -e "${GREEN}======================================================================${NC}"
 echo ""
-echo -e "  ${BOLD}Configured Paths:${NC}"
+echo -e "  ${BOLD}Installed Paths:${NC}"
 echo -e "    * Installation:   ${INSTALL_DIR}"
 echo -e "    * Python venv:    ${INSTALL_DIR}/venv"
 echo -e "    * Configuration:  ${CONFIG_DIR}/device.yaml"
 echo -e "    * Environment:    ${CONFIG_DIR}/sericulture.env"
 echo -e "    * Certificates:   ${CONFIG_DIR}/certs/"
-echo -e "    * SQLite Storage: ${DATA_DIR}/outbox.db"
+echo -e "    * Local Storage:  ${DATA_DIR}/sericulture.db"
 echo ""
-echo -e "  ${BOLD}Next Steps:${NC}"
-echo -e "    1. Update credentials in ${BOLD}/etc/sericulture/sericulture.env${NC}:"
-echo -e "       ${BLUE}sudo nano /etc/sericulture/sericulture.env${NC}"
-echo -e "    2. Start the background service:"
-echo -e "       ${BLUE}sudo systemctl start sericulture${NC}"
-echo -e "    3. View live logs and telemetry:"
-echo -e "       ${BLUE}sudo journalctl -u sericulture -f${NC}"
-echo -e "    4. Check service status:"
-echo -e "       ${BLUE}sudo systemctl status sericulture${NC}"
+echo -e "  ${BOLD}Service Management Commands:${NC}"
+echo -e "    * View live logs:   ${BLUE}sudo journalctl -u sericulture -f${NC}"
+echo -e "    * Service status:   ${BLUE}sudo systemctl status sericulture${NC}"
+echo -e "    * Restart service:  ${BLUE}sudo systemctl restart sericulture${NC}"
+echo -e "    * Stop service:     ${BLUE}sudo systemctl stop sericulture${NC}"
 echo ""
+
+if [ "$REBOOT_RECOMMENDED" = true ]; then
+  echo -e "${YELLOW}${BOLD}[NOTICE] Hardware overlays were added to $BOOT_CONFIG.${NC}"
+  echo -e "${YELLOW}Please reboot your Raspberry Pi to activate I2C & PCIe Gen 3: ${BOLD}sudo reboot${NC}\n"
+fi
