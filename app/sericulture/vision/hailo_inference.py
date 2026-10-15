@@ -91,7 +91,7 @@ class RealHailoBackend:
 
     def probe_device(self) -> bool:
         try:
-            from hailo_platform import Device
+            from hailo_platform import Device  # type: ignore
             devices = Device.scan()
             return len(devices) > 0
         except Exception as e:
@@ -100,7 +100,7 @@ class RealHailoBackend:
 
     def load_hef(self, model_path: str) -> bool:
         try:
-            from hailo_platform import HEF, Device, VDevice
+            from hailo_platform import HEF, Device, VDevice  # type: ignore
             self._target = VDevice()
             self._hef = HEF(model_path)
             self._network_group = self._target.configure(self._hef)[0]

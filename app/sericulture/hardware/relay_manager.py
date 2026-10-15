@@ -63,7 +63,7 @@ class GpiozeroFactory:
 
     def create_output(self, bcm_pin: int, initial_value: bool) -> GPIOOutputDevice:
         # Import lazily so tests don't need gpiozero installed
-        from gpiozero import DigitalOutputDevice
+        from gpiozero import DigitalOutputDevice  # type: ignore
         return DigitalOutputDevice(
             bcm_pin,
             active_high=True,        # We handle polarity in RelayManager
@@ -170,7 +170,7 @@ class RelayManager:
         if hasattr(channel_polarities, "channels"):
             # RelayConfig instance passed
             polarities: dict[RelayChannel, RelayPolarity] = {}
-            for name, ch_cfg in channel_polarities.channels.items():
+            for name, ch_cfg in getattr(channel_polarities, "channels").items():
                 for ch in RelayChannel:
                     if ch.value == ch_cfg.bcm_gpio:
                         polarities[ch] = ch_cfg.polarity

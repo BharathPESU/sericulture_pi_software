@@ -81,7 +81,7 @@ class BuzzerGPIO:
         if self._factory is not None:
             self._device = self._factory.create_output(self._bcm_pin, initial_value=False)
         else:
-            from gpiozero import DigitalOutputDevice
+            from gpiozero import DigitalOutputDevice  # type: ignore
             self._device = DigitalOutputDevice(
                 self._bcm_pin, active_high=True, initial_value=False
             )

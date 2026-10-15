@@ -104,7 +104,7 @@ class OpenCVCameraBackend:
 
     def open(self, path: str, width: int, height: int, fps: int) -> bool:
         try:
-            import cv2
+            import cv2  # type: ignore
             # Try V4L2 backend
             self._cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
             if not self._cap.isOpened():

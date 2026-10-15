@@ -98,8 +98,8 @@ class RealAwsIotTransport:
 
     def connect(self) -> bool:
         try:
-            from awscrt import io, mqtt
-            from awsiot import mqtt_connection_builder
+            from awscrt import io, mqtt  # type: ignore
+            from awsiot import mqtt_connection_builder  # type: ignore
 
             event_loop_group = io.EventLoopGroup(1)
             host_resolver = io.DefaultHostResolver(event_loop_group)
@@ -132,7 +132,7 @@ class RealAwsIotTransport:
         if not self._connected or not self._mqtt_connection:
             return False
         try:
-            from awscrt import mqtt
+            from awscrt import mqtt  # type: ignore
             publish_future, _ = self._mqtt_connection.publish(
                 topic=topic,
                 payload=payload,
@@ -148,7 +148,7 @@ class RealAwsIotTransport:
         if not self._mqtt_connection:
             return False
         try:
-            from awscrt import mqtt
+            from awscrt import mqtt  # type: ignore
 
             def on_msg(topic, payload, dup, qos, retain, **kwargs):
                 callback(topic, payload.decode("utf-8"))
